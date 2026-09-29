@@ -5,7 +5,7 @@
 #include <termios.h>
 #include <unistd.h>
 #include <sys/ioctl.h>
-#include <errno>
+#include <cerrno>
 
 
 /*
@@ -33,7 +33,6 @@ public:
         rawContent = str;
     }
 };
-std::vector<SingleRow> row;
 
 class SyntaxConfig {
 public:
@@ -49,7 +48,7 @@ class EditorSetting {
 public:
     int autoWrap;
 };
-static EditorSetting ES = {0};
+static EditorSetting ES;
 
 class EditorConfig {
 public:
@@ -58,7 +57,8 @@ public:
     //int rawMode;
     int rowsOffset, colsOffset;
     int windowRows, windowCols;
-    int cursor_x, cursor_y; // x down, y right
+    int cursor_x, cursor_y; // x down, y right, ** POSITION IN RAWROW **
+    std::vector<SingleRow> row;
     std::string promptLine;
 };
 static EditorConfig EC;
@@ -148,13 +148,23 @@ int readFile(const std::string &filename) {
     }
     std::string line;
     while (std::getline(file, line)) {
-        row.push_back(SingleRow(line));
+        EC.row.push_back(SingleRow(line));
     }
     file.close();
 }
-void writeFile() {}
+int writeFile(const std::string &filename) {
+    std::ofstream file(filename);
+    if (!file.is_open()) {
+        std::cerr << "Fail to Write File!" << std::endl;
+        return -1;
+    }
+    for (auto &x : EC.row) {
+        file.write(x.rawContent.data(), x.rawContent.size());
+        file << '\n';
+    }
+    return 0;
+}
 void renderRow() {}
-void writeBackRawRow() {}
 
 void insertChar() {}
 void deleteChar() {}
