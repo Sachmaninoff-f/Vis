@@ -7,6 +7,15 @@
 #include <sys/ioctl.h>
 #include <cerrno>
 
+#define HIGHLIGHT_NORMAL 0
+#define HIGHLIGHT_NONPRINT 1
+#define HIGHLIGHT_COMMENT 2
+#define HIGHLIGHT_MULITLINECOMMENT 3
+#define HIGHLIGHT_KEYWORD 4
+#define HIGHLIGHT_TYPE 5
+#define HIGHLIGHT_STRING 6
+#define HIGHLIGHT_NUMBER 7
+#define HIGHLIGHT_VISABLEMODE 8
 
 /*
 class Language {
@@ -24,7 +33,7 @@ std::vector<Language> Languages = {
 
 class SingleRow {
 public:
-    int index;
+    //int index;
     std::string rawContent;
     std::vector<char> renderedContent;
     std::vector<char> highlightType;
@@ -38,6 +47,7 @@ class SyntaxConfig {
 public:
     std::vector<std::string> extensions;
     std::vector<std::string> keywords;
+    std::vector<std::string> types;
     std::vector<std::string> functions;
     std::vector<char> singleLineCommentStart;
     std::vector<char> multiLineCommentStart;
@@ -60,6 +70,7 @@ public:
     int cursor_x, cursor_y; // x down, y right, ** POSITION IN RAWROW **
     std::vector<SingleRow> row;
     std::string promptLine;
+    SyntaxConfig *editorSyntax;
 };
 static EditorConfig EC;
 
@@ -70,7 +81,7 @@ private:
 public:
     TerminalControl() {
         struct termios raw_termios;
-        if(tcgetattr(STDIN_FILENO, &orig_termios) == -1) goto error;
+        if(tcgetattr(STDIN_FILENO, &orig_termios) == -1) throw std::runtime_error("tcgetattr failed.");
         raw_termios = orig_termios;
         raw_termios.c_iflag &= ~(IXON | ICRNL | BRKINT | INPCK | ISTRIP);
         raw_termios.c_oflag &= ~(OPOST);
@@ -78,9 +89,7 @@ public:
         raw_termios.c_cflag |= (CS8);
         raw_termios.c_cc[VMIN] = 0;
         raw_termios.c_cc[VTIME] = 1;
-        if(tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw_termios) == -1) goto error;
-    error:
-        throw std::runtime_error("tcgetattr or tcsetattr fialed.");
+        if(tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw_termios) == -1) throw std::runtime_error("tcsetattr failed.");
     }
     ~TerminalControl() {
         tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig_termios);
@@ -164,7 +173,98 @@ int writeFile(const std::string &filename) {
     }
     return 0;
 }
-void renderRow() {}
+
+bool isSeperate(const char c) {
+    return !std::isalnum(c) && c != '_';
+}
+void renderRow(int rowIndex) {
+    SingleRow &c_row = EC.row[rowIndex];
+    c_row.renderedContent.clear();
+    for (int i = 0; i < c_row.rawContent.size(); i++) {
+        if (isprint((unsigned char)c_row.rawContent[i])) {
+            c_row.renderedContent.push_back(c_row.rawContent[i]);
+        }
+        if (c_row.rawContent[i] == '\t') {
+            c_row.renderedContent.push_back(' ');
+            while ( c_row.renderedContent.size() % 4 != 0) {
+                c_row.renderedContent.push_back(' ');
+            }
+        }
+    }
+}
+void highlightRow(int rowIndex) {
+    SingleRow &c_row = EC.row[rowIndex];
+    c_row.highlightType.clear();
+    std::vector<char> scs = EC.editorSyntax->singleLineCommentStart;
+    std::vector<char> mcs = EC.editorSyntax->multiLineCommentStart;
+    std::vector<char> mce = EC.editorSyntax->multiLineCommentEnd;
+    //int inMultiComment = 0;
+    //int inString = 0;
+    int i = 0;
+    char stringStart;
+
+    if (rowIndex > 0 && EC.row[rowIndex - 1].hasOpenComment) goto INMULTICOMMENT;
+    else goto NORMAL;
+INSINGLECOMMENT:
+    c_row.hasOpenComment = 0;
+    while (i < c_row.renderedContent.size()) {
+        c_row.highlightType.push_back(HIGHLIGHT_COMMENT);
+        i++;
+    }
+    return;
+INMULTICOMMENT:
+    while (i < c_row.renderedContent.size()) {
+        if (i + mce.size() < c_row.renderedContent.size()) {
+            if (equal(
+                c_row.renderedContent.begin() + i,
+                c_row.renderedContent.begin() + i + mce.size(),
+                mce.begin(),
+                mce.end())) {
+                for (int j = 0; j < mce.size(); j++) {
+                    c_row.highlightType.push_back(HIGHLIGHT_MULITLINECOMMENT);
+                }
+                goto NORMAL;
+            }
+        }
+        c_row.highlightType.push_back(HIGHLIGHT_MULITLINECOMMENT);
+        i++;
+    }
+    c_row.hasOpenComment = 1;
+    return;
+INSTRING:
+    while (i < c_row.renderedContent.size()) {
+        if (c_row.renderedContent[i] == stringStart) {
+            c_row.highlightType.push_back(HIGHLIGHT_STRING);
+            i++;
+            goto NORMAL;
+        }
+        c_row.highlightType.push_back(HIGHLIGHT_STRING);
+        i++;
+    }
+NORMAL:
+    while (i < c_row.renderedContent.size()) {
+        if (i + scs.size() < c_row.renderedContent.size() &&
+            equal(
+            c_row.renderedContent.begin() + i,
+            c_row.renderedContent.begin() + i + scs.size(),
+            scs.begin(),
+            scs.end())) goto INSINGLECOMMENT;
+        if (i + mcs.size() < c_row.renderedContent.size() && 
+            equal(
+            c_row.renderedContent.begin() + i,
+            c_row.renderedContent.begin() + i + mce.size(),
+            mce.begin(),
+            mce.end())) goto INMULTICOMMENT;
+        if (c_row.renderedContent[i] == '\'' || c_row.renderedContent[i] == '\"') {
+            stringStart = c_row.renderedContent[i];
+            goto INSTRING;
+        }
+        c_row.highlightType.push_back(HIGHLIGHT_NORMAL);
+        i++;
+    }
+    return;
+}
+void syntaxUpdate(int rowIndex) {}
 
 void insertChar() {}
 void deleteChar() {}
